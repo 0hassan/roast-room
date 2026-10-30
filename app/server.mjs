@@ -1,7 +1,8 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
-import { APP_ROOT, env } from "./lib/env.mjs";
+import { spawn } from "node:child_process";
+import { APP_ROOT, REPO_ROOT, env } from "./lib/env.mjs";
 import { loadRoster, BOARD } from "./lib/seats.mjs";
 import { startCouncil, getSession, subscribe, listSaved, loadSaved, MODELS } from "./lib/council.mjs";
 import { usage } from "./lib/anthropic.mjs";
@@ -12,11 +13,35 @@ const PUBLIC = path.join(APP_ROOT, "public");
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".webp": "image/webp", ".jpg": "image/jpeg", ".ico": "image/x-icon", ".json": "application/json", ".ttf": "font/ttf", ".txt": "text/plain; charset=utf-8" };
 
 let running = null; // one council at a time (API runner)
+let cli = null; // the Claude Code run started from the room (claude runner)
 
 // "viewer" (default): the room plays councils that /roast-room runs in Claude Code.
 // "api": the room can also run councils itself on ANTHROPIC_API_KEY (COUNCIL_RUNNER=api in .env).
-const RUNNER = (process.env.COUNCIL_RUNNER || env("COUNCIL_RUNNER") || "viewer").toLowerCase() === "api" ? "api" : "viewer";
+// "claude": the room types /roast-room into Claude Code for you (headless `claude -p`) and plays it as usual.
+const RUNNER = ["api", "claude"].find((r) => r === (process.env.COUNCIL_RUNNER || env("COUNCIL_RUNNER")).toLowerCase()) || "viewer";
+const CLAUDE_MODELS = { "claude-opus-5-5": "Opus 5.5", "claude-sonnet-5-5": "Sonnet 5.5", "claude-haiku-5-5": "Haiku 5.5", "claude-fable-5-1": "Fable 5.1" };
 watch.startWatching();
+
+// Runs the council in Claude Code with nobody at the terminal. The session files it writes
+// land in sessions/, and the watcher plays them like any other council.
+function runClaude(prompt, quick, model) {
+  const ask = `/roast-room ${quick ? "--quick " : ""}${prompt}\n\nJust run it: nobody is at the terminal, so seat the recommended board and fill any gaps with stated assumptions.`;
+  const args = ["-p", ask, "--permission-mode", "acceptEdits", "--model", model, "--disallowedTools", "AskUserQuestion"];
+  const run = { done: false, error: null, log: "" };
+  run.proc = spawn("claude", args, { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] });
+  const keep = (d) => { run.log = (run.log + d).slice(-2000); };
+  run.proc.stdout.on("data", keep);
+  run.proc.stderr.on("data", keep);
+  run.proc.on("error", (e) => { run.done = true; run.error = e.code === "ENOENT" ? "Couldn't find the claude command. Install Claude Code, then reopen the room." : e.message; });
+  run.proc.on("close", (code) => {
+    run.done = true;
+    if (code && !run.error) run.error = run.log.trim().split("\n").slice(-3).join(" ") || `Claude Code stopped (exit ${code}).`;
+  });
+  return run;
+}
+
+// Closing the room (or the desktop app) stops a council it started.
+for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => { cli?.proc.kill(); process.exit(0); });
 
 function send(res, code, body, type = "application/json") {
   res.writeHead(code, { "content-type": type, "cache-control": "no-store" });
@@ -37,14 +62,19 @@ const server = http.createServer(async (req, res) => {
       // portraits: which of the four mouth shapes exist for each seat (a seat with none gets a drawn bust)
       const frame = (key, sh) => ["webp", "png", "jpg"].map((x) => `${key}-${sh}.${x}`).find((f) => fs.existsSync(path.join(PUBLIC, "portraits", f)));
       const seats = loadRoster().map((s) => ({ ...s, portraits: Object.fromEntries(["base", "open", "mid", "blink"].map((sh) => [sh, frame(s.key, sh)]).filter(([, f]) => f).map(([sh, f]) => [sh, `/portraits/${f}`])) }));
-      return send(res, 200, { seats, board: BOARD, models: MODELS, runner: RUNNER, hasKey: Boolean(env("ANTHROPIC_API_KEY")) });
+      return send(res, 200, { seats, board: BOARD, models: MODELS, claudeModels: CLAUDE_MODELS, runner: RUNNER, hasKey: Boolean(env("ANTHROPIC_API_KEY")) });
     }
     if (p === "/api/usage") return send(res, 200, usage);
     if (p === "/api/council" && req.method === "POST") {
-      if (RUNNER !== "api") return send(res, 403, { error: "This room is a viewer. Run /roast-room in Claude Code, or set COUNCIL_RUNNER=api in .env." });
-      if (running && getSession(running)?.status === "running") return send(res, 409, { error: "A council is already in session. Wait for its verdict." });
-      const { prompt, mode } = await readJson(req);
+      if (RUNNER === "viewer") return send(res, 403, { error: "This room is a viewer. Run /roast-room in Claude Code, or set COUNCIL_RUNNER=claude in .env." });
+      const { prompt, mode, model } = await readJson(req);
       if (!prompt || prompt.trim().length < 10) return send(res, 400, { error: "Give the council a real decision (at least a sentence)." });
+      if (RUNNER === "claude") {
+        if (cli && !cli.done) return send(res, 409, { error: "Claude Code is already running a council. Wait for its verdict." });
+        cli = runClaude(prompt.trim().slice(0, 4000), mode === "quick", CLAUDE_MODELS[model] ? model : "claude-opus-5-5");
+        return send(res, 200, { started: true });
+      }
+      if (running && getSession(running)?.status === "running") return send(res, 409, { error: "A council is already in session. Wait for its verdict." });
       const s = startCouncil(prompt.trim().slice(0, 4000), mode === "quick" ? "quick" : "full");
       running = s.id;
       return send(res, 200, { id: s.id });
@@ -62,7 +92,7 @@ const server = http.createServer(async (req, res) => {
     if (p === "/api/sessions") {
       const all = [...listSaved(), ...watch.listLive()].sort((a, b) => (a.id < b.id ? 1 : -1));
       const apiRunning = running && getSession(running)?.status === "running" ? running : null;
-      return send(res, 200, { sessions: all, running: apiRunning, live: watch.runningId() });
+      return send(res, 200, { sessions: all, running: apiRunning, live: watch.runningId(), cli: cli && { running: !cli.done, error: cli.error } });
     }
     if (p.startsWith("/api/sessions/")) {
       const id = decodeURIComponent(p.split("/").pop());
@@ -80,4 +110,4 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, "127.0.0.1", () => console.log(`Roast Room on http://localhost:${PORT} (${RUNNER === "api" ? "viewer + API runner" : "viewer: run /roast-room in Claude Code"})`));
+server.listen(PORT, "127.0.0.1", () => console.log(`Roast Room on http://localhost:${PORT} (${{ api: "viewer + API runner", claude: "viewer + Claude Code runner" }[RUNNER] || "viewer: run /roast-room in Claude Code"})`));

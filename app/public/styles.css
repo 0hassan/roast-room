@@ -200,10 +200,10 @@ button { font: inherit; cursor: pointer; }
 
 /* the middle of the table: composer, captions, fault lines, verdict plate */
 .center { position: absolute; z-index: 36; display: grid; place-items: start center; }
-.composer { width: min(620px, 100%); display: grid; gap: 10px; text-align: center; }
+.composer { width: min(620px, 100%); display: grid; gap: 8px; text-align: center; }
 .composer h2 { font: 500 clamp(20px, 2vw, 28px)/1.15 var(--font-display); margin: 0; color: var(--ink); letter-spacing: var(--track-head); }
 .composer textarea {
-  width: 100%; resize: vertical; min-height: 72px; max-height: 200px; border-radius: 12px; border: 1px solid var(--hairline-strong);
+  width: 100%; resize: vertical; min-height: 60px; max-height: 200px; border-radius: 12px; border: 1px solid var(--hairline-strong);
   background: rgba(8, 10, 14, .78); color: var(--ink); padding: 11px 14px; font: 14px/1.45 var(--font-text); outline: none;
 }
 .composer textarea::placeholder { color: var(--ink-mute); }
@@ -222,6 +222,8 @@ button { font: inherit; cursor: pointer; }
 .mode small { display: block; font-weight: 400; font-size: 11px; color: var(--ink-mute); }
 .mode input:checked + span { border-color: #ffffff; color: var(--ink); background: rgba(255, 255, 255, .06); }
 .mode input:focus-visible + span { outline: 2px solid var(--accent); }
+.model-pick { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-mute); }
+.model-pick select { background: rgba(8, 10, 14, .6); color: var(--ink); border: 1px solid var(--hairline-strong); border-radius: 10px; padding: 7px 10px; font: inherit; }
 .convene {
   background: #ffffff; color: #07121c; border: 0; border-radius: 999px; padding: 11px 22px; font-weight: 600; font-size: 14px;
   transition: background .2s;

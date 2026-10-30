@@ -60,6 +60,12 @@
             <div class="row"><button class="ghost" type="button" id="waitGuide">What to put in your question</button><button class="ghost" type="button" id="waitHistory">Watch a past council</button></div>
           </div>
 
+          <div class="waiting" id="sent" hidden>
+            <span class="pulse"><i></i>Sent to Claude Code</span>
+            <h2>The Chair is reading your question</h2>
+            <p>The council shows up here once the board is seated, usually within a few minutes.</p>
+          </div>
+
           <form class="composer" id="composer" hidden>
             <h2 data-type>What decision do you need help with?</h2>
             <textarea id="prompt" rows="3" placeholder="Give them the decision, your options, a few numbers (revenue, cash, team), and which way you're leaning." required minlength="10"></textarea>
@@ -69,6 +75,7 @@
                 <label><input type="radio" name="mode" value="full" checked><span>Full council <small>7 seats, 3 rounds</small></span></label>
                 <label><input type="radio" name="mode" value="quick"><span>Quick <small>4 seats, 2 rounds</small></span></label>
               </div>
+              <label class="model-pick" id="modelPick" hidden><select id="model" aria-label="Model" title="Model"></select></label>
               <button class="convene" type="submit" id="convene">Convene the council</button>
             </div>
           </form>

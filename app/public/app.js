@@ -14,14 +14,18 @@ const SAMPLES = [
 const EXAMPLE = "I run a coaching business at $30k a month with 15 clients at $2,000 each. Should I raise to $3,500 for everyone, raise for new clients only, or keep $2,000? Close rate is about 50% and I have $40k in the bank. Success is $45k a month by March. I'm leaning toward raising for everyone because I'm underpaid.";
 
 // The how-to, shown in the side panel while the room is empty and in "How it works".
-const GUIDE = `
+// In the claude runner you type here and the room runs Claude Code for you.
+const guide = (here = state.runner === "claude") => `
   <div class="guide">
     <div class="guide-sec">
       <h4>How to use the Roast Room</h4>
-      <ol>
+      <ol>${here ? `
+        <li><span>Type your decision in the box.</span></li>
+        <li><span>Pick Full council or Quick, and the model.</span></li>
+        <li><span>Click Convene. Claude Code runs the council in the background and the Chair seats the board it recommends. Watch them argue it out here.</span></li>` : `
         <li><span>Open Claude Code in this folder.</span></li>
         <li><span>Type <code>/roast-room</code> and your decision.</span></li>
-        <li><span>Pick your advisors (the Chair recommends a board) and answer its questions. Then watch the council argue it out here.</span></li>
+        <li><span>Pick your advisors (the Chair recommends a board) and answer its questions. Then watch the council argue it out here.</span></li>`}
         <li><span>When the verdict lands, download it as a PDF.</span></li>
       </ol>
     </div>
@@ -35,21 +39,21 @@ const GUIDE = `
         <li><span><b>What success looks like</b>, and by when.</span></li>
         <li><span><b>Which way you're leaning</b>, and why. The council tests it.</span></li>
       </ul>
-      <p class="note" style="margin-top:8px">Left something out? The Chair asks before the council starts.</p>
+      <p class="note" style="margin-top:8px">${here ? "Left something out? The Chair fills the gap with a stated assumption." : "Left something out? The Chair asks before the council starts."}</p>
     </div>
     <div class="guide-sec">
       <h4>Example</h4>
       <div class="example">
-        <p><code>/roast-room</code> ${EXAMPLE.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</p>
-        <button class="ghost" type="button" data-copy-example>Copy this example</button>
+        <p>${here ? "" : "<code>/roast-room</code> "}${EXAMPLE.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</p>
+        <button class="ghost" type="button" data-copy-example>${here ? "Use this example" : "Copy this example"}</button>
       </div>
     </div>
     <div class="guide-sec">
       <h4>Good to know</h4>
       <ul>
-        <li><span><b>Pick your council:</b> the Chair recommends the advisors that fit your question and asks you to confirm. Add or drop anyone.</span></li>
+        <li><span><b>Pick your council:</b> the Chair recommends the advisors that fit your question${here ? "." : " and asks you to confirm. Add or drop anyone."}</span></li>
         <li><span><b>Full council:</b> 5 to 7 advisors, 3 rounds. For big calls that are hard to undo.</span></li>
-        <li><span><b>Quick:</b> add <code>--quick</code> for 4 advisors and 2 rounds. Uses far less of your plan.</span></li>
+        <li><span><b>Quick:</b> ${here ? "pick Quick" : "add <code>--quick</code>"} for 4 advisors and 2 rounds. Uses far less of your plan.</span></li>
         <li><span><b>Every council is saved.</b> Open Past sessions to replay one or download its PDF.</span></li>
         <li><span><b>Add an advisor:</b> type <code>/newroaster</code> and a name. Change your default board with <code>/roast-room board</code>.</span></li>
       </ul>
@@ -101,6 +105,8 @@ const state = {
 async function boot() {
   const r = await refreshSeats();
   state.runner = r.runner;
+  $("#model").innerHTML = Object.entries(r.claudeModels || {}).map(([id, name]) => `<option value="${id}">${name}</option>`).join("");
+  if (r.runner === "claude") $("#wcNudge").textContent = "Nothing new for a while? Claude Code is still working in the background. A full council takes a while.";
   if (r.runner === "api" && !r.hasKey) toast("No ANTHROPIC_API_KEY found in .env. Add it and restart the server.");
   renderSeats(state.board);
   renderSamples();
@@ -133,6 +139,7 @@ async function refreshSeats() {
 const seenLive = new Set();
 async function watchForLive() {
   const ss = await fetch("/api/sessions").then((x) => x.json()).catch(() => null);
+  if (ss?.cli?.error && !$("#sent").hidden) { reset(); toast(`Claude Code stopped: ${ss.cli.error}`); }
   const id = ss?.live || ss?.running;
   if (!id || seenLive.has(id) || id === state.session) return;
   seenLive.add(id);
@@ -242,10 +249,11 @@ function bindUI() {
     if (prompt.length < 10) return toast("Give the council a real decision, at least a sentence.");
     const mode = $('input[name="mode"]:checked').value;
     $("#convene").disabled = true;
-    const r = await fetch("/api/council", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ prompt, mode }) });
+    const r = await fetch("/api/council", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ prompt, mode, model: $("#model").value }) });
     const j = await r.json();
     $("#convene").disabled = false;
     if (!r.ok) return toast(j.error || "Could not start the council.");
+    if (j.started) { $("#composer").hidden = true; $("#sent").hidden = false; return; } // Claude Code: the session shows up via watchForLive
     attach(j.id);
   });
   const openFrom = (e) => { const b = e.target.closest("[data-seat]"); if (b) openCard(b.dataset.seat); };
@@ -257,6 +265,7 @@ function bindUI() {
   $("#waitGuide").addEventListener("click", openGuide);
   $("#guideBtn").addEventListener("click", openGuide);
   document.addEventListener("click", async (e) => {
+    if (e.target.closest("[data-copy-example]") && state.runner === "claude") { $("#prompt").value = EXAMPLE; $("#prompt").focus(); return; }
     if (e.target.closest("[data-copy-example]")) {
       try { await navigator.clipboard.writeText("/roast-room " + EXAMPLE); toast("Copied. Paste it into Claude Code."); }
       catch { toast("Copy didn't work here. Select the text and copy it."); }
@@ -325,8 +334,10 @@ function reset() {
   hideWait();
   $("#stage").classList.remove("live");
   $("#topic").hidden = true;
-  $("#composer").hidden = state.runner !== "api";
-  $("#waiting").hidden = state.runner === "api";
+  $("#composer").hidden = state.runner === "viewer";
+  $("#waiting").hidden = state.runner !== "viewer";
+  $("#sent").hidden = true;
+  $("#modelPick").hidden = state.runner !== "claude";
   $("#caption").hidden = true;
   $("#cruxes").hidden = true;
   $("#plate").hidden = true;
@@ -334,7 +345,7 @@ function reset() {
   $("#newBtn").hidden = true;
   $("#verdictSheet").hidden = true;
   $("#panelHead").textContent = "Getting started";
-  $("#feed").innerHTML = GUIDE;
+  $("#feed").innerHTML = guide();
   $$(".vote").forEach((b) => b.remove());
   renderSeats(state.board);
   $$(".seat").forEach((el) => { el.classList.remove("absent", "speaking", "thinking", "addressed"); $(".bust", el).dataset.shape = "base"; });
@@ -873,7 +884,7 @@ function tickWait() {
 }
 
 function openGuide() {
-  $("#guideBody").innerHTML = GUIDE;
+  $("#guideBody").innerHTML = guide();
   const d = $("#guideDialog");
   if (!d.open) d.showModal();
 }
